@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::capture::cursor::CursorPosition;
+use crate::editor::speed::SpeedSegment;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
@@ -20,6 +21,8 @@ pub struct Project {
     pub zoom_regions: Vec<ZoomRegion>,
     pub annotations: Vec<Annotation>,
     pub trim_segments: Vec<TrimSegment>,
+    #[serde(default)]
+    pub speed_segments: Vec<SpeedSegment>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -68,6 +71,7 @@ impl Project {
             zoom_regions: Vec::new(),
             annotations: Vec::new(),
             trim_segments: Vec::new(),
+            speed_segments: Vec::new(),
         }
     }
 
