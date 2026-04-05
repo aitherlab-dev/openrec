@@ -1,1 +1,3 @@
-// TODO: Screen capture via xdg-desktop-portal + PipeWire
+pub mod portal;
+
+pub use portal::{CaptureSourceType, ScreencastSession, SelectedSource};
