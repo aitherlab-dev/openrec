@@ -4,6 +4,7 @@ mod camera;
 mod capture;
 #[allow(dead_code)]
 mod config;
+#[allow(dead_code)]
 mod editor;
 #[allow(dead_code)]
 mod export;
