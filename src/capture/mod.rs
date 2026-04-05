@@ -1,3 +1,4 @@
+pub mod pipeline;
 pub mod pipewire_capture;
 pub mod portal;
 
