@@ -56,20 +56,25 @@ struct CaptureState {
     frame_sender: Sender<VideoFrame>,
 }
 
+struct QuitSignal;
+
 pub struct PipeWireCapture {
     node_id: u32,
     fps: u32,
     running: Arc<AtomicBool>,
+    quit_sender: Option<pw::channel::Sender<QuitSignal>>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 impl PipeWireCapture {
+    // TODO: вынести pw::init() в main() при интеграции с приложением
     pub fn new(node_id: u32, fps: u32) -> Result<Self> {
         pw::init();
         Ok(Self {
             node_id,
             fps,
             running: Arc::new(AtomicBool::new(false)),
+            quit_sender: None,
             thread: None,
         })
     }
@@ -85,8 +90,12 @@ impl PipeWireCapture {
         let node_id = self.node_id;
         let fps = self.fps;
 
+        let (quit_tx, quit_rx) = pw::channel::channel::<QuitSignal>();
+        self.quit_sender = Some(quit_tx);
+
         let handle = thread::spawn(move || {
-            if let Err(e) = run_pipewire_loop(node_id, fps, frame_sender, running.clone()) {
+            if let Err(e) = run_pipewire_loop(node_id, fps, frame_sender, running.clone(), quit_rx)
+            {
                 log::error!("PipeWire capture error: {e:#}");
             }
             running.store(false, Ordering::SeqCst);
@@ -98,6 +107,9 @@ impl PipeWireCapture {
 
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::SeqCst);
+        if let Some(sender) = self.quit_sender.take() {
+            let _ = sender.send(QuitSignal);
+        }
         if let Some(handle) = self.thread.take() {
             let _ = handle.join();
         }
@@ -119,6 +131,7 @@ fn run_pipewire_loop(
     fps: u32,
     frame_sender: Sender<VideoFrame>,
     running: Arc<AtomicBool>,
+    quit_rx: pw::channel::Receiver<QuitSignal>,
 ) -> Result<()> {
     let mainloop =
         pw::main_loop::MainLoopRc::new(None).context("Failed to create PipeWire main loop")?;
@@ -127,6 +140,13 @@ fn run_pipewire_loop(
     let core = context
         .connect_rc(None)
         .context("Failed to connect to PipeWire")?;
+
+    // Attach quit channel to mainloop — allows stop() from another thread
+    let mainloop_for_quit = mainloop.clone();
+    let _quit_receiver = quit_rx.attach(mainloop.loop_(), move |_| {
+        log::info!("Quit signal received, stopping PipeWire loop");
+        mainloop_for_quit.quit();
+    });
 
     let stream = pw::stream::StreamBox::new(
         &core,
@@ -228,7 +248,10 @@ fn run_pipewire_loop(
 
             let size = data.format.size();
             let spa_fmt = data.format.format();
-            let format = PixelFormat::from_spa(spa_fmt).unwrap_or(PixelFormat::BGRx);
+            let Some(format) = PixelFormat::from_spa(spa_fmt) else {
+                log::warn!("Unsupported pixel format: {spa_fmt:?}, skipping frame");
+                return;
+            };
 
             let timestamp_ms = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -248,7 +271,9 @@ fn run_pipewire_loop(
                 timestamp_ms,
             };
 
-            let _ = data.frame_sender.try_send(frame);
+            if data.frame_sender.try_send(frame).is_err() {
+                log::debug!("Frame dropped: channel full");
+            }
         })
         .register()
         .context("Failed to register stream listener")?;
