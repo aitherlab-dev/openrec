@@ -3329,6 +3329,7 @@ dependencies = [
  "iced",
  "ksni",
  "log",
+ "naga 29.0.1",
  "nokhwa",
  "pipewire",
  "serde",

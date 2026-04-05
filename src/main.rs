@@ -15,6 +15,8 @@ mod project;
 #[allow(dead_code)]
 mod tray;
 #[allow(dead_code)]
+mod effects;
+#[allow(dead_code)]
 mod ui;
 
 use app::App;
