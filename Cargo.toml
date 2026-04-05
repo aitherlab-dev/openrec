@@ -6,7 +6,7 @@ license = "MIT"
 
 [dependencies]
 iced = { version = "0.14", features = ["tokio", "image", "svg", "canvas"] }
-ashpd = { version = "0.13", features = ["tokio", "screencast"] }
+ashpd = { version = "0.13", features = ["tokio", "screencast", "global_shortcuts"] }
 pipewire = "0.9"
 ksni = "0.3"
 nokhwa = { version = "0.10", features = ["input-v4l"] }
