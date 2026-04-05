@@ -89,7 +89,7 @@ impl AudioCapture {
         let handle = thread::Builder::new()
             .name("audio-capture".into())
             .spawn(move || {
-                if let Err(e) = run_capture_loop(config, sender, quit_rx, running.clone()) {
+                if let Err(e) = run_capture_loop(config, sender, quit_rx) {
                     log::error!("audio capture error: {e:#}");
                 }
                 running.store(false, Ordering::Relaxed);
@@ -128,7 +128,6 @@ fn run_capture_loop(
     config: AudioConfig,
     sender: Sender<AudioFrame>,
     quit_rx: pw::channel::Receiver<()>,
-    _running: Arc<AtomicBool>,
 ) -> Result<()> {
     pw::init();
 
@@ -157,8 +156,19 @@ fn run_capture_loop(
 
     let _listener = stream
         .add_local_listener_with_user_data(user_data)
-        .state_changed(|_stream, _data, old, new| {
-            log::debug!("audio stream state: {old:?} → {new:?}");
+        .state_changed({
+            let mainloop = mainloop.clone();
+            move |_stream, _data, _old, new| {
+                log::debug!("audio stream state: {new:?}");
+                match new {
+                    pw::stream::StreamState::Error(_)
+                    | pw::stream::StreamState::Unconnected => {
+                        log::error!("audio stream error: {new:?}");
+                        mainloop.quit();
+                    }
+                    _ => {}
+                }
+            }
         })
         .param_changed(|_stream, data, id, param| {
             if let Some(param) = param {
@@ -331,6 +341,25 @@ mod tests {
     fn test_list_devices() {
         let devices = AudioCapture::list_devices();
         assert!(devices.is_ok());
+    }
+
+    #[test]
+    fn test_stream_properties_microphone() {
+        let config = AudioConfig::default();
+        let props = build_stream_properties(&config);
+        assert_eq!(props.get(*pw::keys::MEDIA_TYPE), Some("Audio"));
+        assert_eq!(props.get(*pw::keys::MEDIA_CATEGORY), Some("Capture"));
+        assert!(props.get(*pw::keys::STREAM_CAPTURE_SINK).is_none());
+    }
+
+    #[test]
+    fn test_stream_properties_system_audio() {
+        let config = AudioConfig {
+            source: AudioSource::SystemAudio,
+            ..Default::default()
+        };
+        let props = build_stream_properties(&config);
+        assert_eq!(props.get(*pw::keys::STREAM_CAPTURE_SINK), Some("true"));
     }
 
     #[test]
