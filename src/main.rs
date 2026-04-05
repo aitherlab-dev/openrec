@@ -7,6 +7,7 @@ mod config;
 mod editor;
 #[allow(dead_code)]
 mod export;
+#[allow(dead_code)]
 mod project;
 #[allow(dead_code)]
 mod tray;
