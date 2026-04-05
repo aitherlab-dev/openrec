@@ -1,3 +1,4 @@
+pub mod annotations;
 pub mod preview;
 pub mod state;
 pub mod timeline;
