@@ -1,1 +1,1 @@
-// TODO: Screen capture via xdg-desktop-portal + PipeWire
+pub mod pipewire_capture;
