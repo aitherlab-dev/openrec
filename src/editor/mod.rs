@@ -1,5 +1,6 @@
 pub mod annotations;
 pub mod preview;
+pub mod speed;
 pub mod state;
 pub mod timeline;
 pub mod zoom;
