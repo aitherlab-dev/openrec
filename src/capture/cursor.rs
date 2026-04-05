@@ -233,6 +233,28 @@ mod tests {
     }
 
     #[test]
+    fn test_parse_negative_coordinates() {
+        let (x, y) = parse_hyprctl_cursorpos("-100, -50").unwrap();
+        assert_eq!(x, -100.0);
+        assert_eq!(y, -50.0);
+    }
+
+    #[test]
+    fn test_parse_large_coordinates() {
+        let (x, y) = parse_hyprctl_cursorpos("7680, 4320").unwrap();
+        assert_eq!(x, 7680.0);
+        assert_eq!(y, 4320.0);
+    }
+
+    #[test]
+    fn test_cursor_telemetry_custom_interval() {
+        let telemetry = CursorTelemetry::new(32);
+        assert_eq!(telemetry.poll_interval, Duration::from_millis(32));
+        assert!(!telemetry.is_running());
+        assert_eq!(telemetry.positions_count(), 0);
+    }
+
+    #[test]
     #[ignore]
     fn integration_start_stop() {
         // Требует Hyprland с hyprctl

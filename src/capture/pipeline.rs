@@ -322,6 +322,65 @@ mod tests {
     }
 
     #[test]
+    fn test_recording_state_display() {
+        // RecordingState derives Debug — verify all variants produce meaningful output
+        let states = vec![
+            (RecordingState::Idle, "Idle"),
+            (RecordingState::Starting, "Starting"),
+            (RecordingState::Recording, "Recording"),
+            (RecordingState::Stopping, "Stopping"),
+            (RecordingState::Error("oops".into()), "Error"),
+        ];
+
+        for (state, expected_substr) in states {
+            let debug = format!("{:?}", state);
+            assert!(
+                debug.contains(expected_substr),
+                "Debug of {:?} should contain '{}', got: {}",
+                state,
+                expected_substr,
+                debug
+            );
+        }
+    }
+
+    #[test]
+    #[ignore] // requires D-Bus (ScreencastSession::new fails without it)
+    fn test_pipeline_state_after_error() {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let config = AppConfig::default();
+            let mut pipeline = RecordingPipeline::new(&config);
+
+            // start() should fail without D-Bus, state should revert to Idle
+            let result = pipeline.start().await;
+            assert!(result.is_err());
+            assert_eq!(
+                pipeline.state(),
+                &RecordingState::Idle,
+                "state should be Idle after failed start"
+            );
+        });
+    }
+
+    #[test]
+    fn test_output_filename_uniqueness() {
+        let dir = std::path::Path::new("/tmp/recordings");
+        let path1 = generate_output_filename(dir);
+
+        // Sleep 1ms to guarantee different timestamp
+        std::thread::sleep(Duration::from_millis(2));
+        let path2 = generate_output_filename(dir);
+
+        assert_ne!(
+            path1, path2,
+            "filenames generated at different times must differ"
+        );
+        // Both should be in the same directory
+        assert_eq!(path1.parent(), path2.parent());
+    }
+
+    #[test]
     #[ignore] // requires D-Bus + PipeWire + portal dialog
     fn integration_full_recording_cycle() {
         let rt = tokio::runtime::Runtime::new().unwrap();

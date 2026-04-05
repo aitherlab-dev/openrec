@@ -293,6 +293,104 @@ mod tests {
     }
 
     #[test]
+    fn test_encoder_config_custom_bitrate() {
+        let config = EncoderConfig {
+            bitrate: Some(5000),
+            ..Default::default()
+        };
+        assert_eq!(config.bitrate, Some(5000));
+        assert_eq!(config.width, 1920);
+        assert!(matches!(config.codec, Codec::H264));
+    }
+
+    #[test]
+    fn test_encoder_config_all_codecs() {
+        let h264 = EncoderConfig {
+            codec: Codec::H264,
+            ..Default::default()
+        };
+        let h265 = EncoderConfig {
+            codec: Codec::H265,
+            ..Default::default()
+        };
+        let av1 = EncoderConfig {
+            codec: Codec::AV1,
+            ..Default::default()
+        };
+
+        assert!(matches!(h264.codec, Codec::H264));
+        assert!(matches!(h265.codec, Codec::H265));
+        assert!(matches!(av1.codec, Codec::AV1));
+    }
+
+    #[test]
+    #[ignore] // libsvtav1 may not be available
+    fn test_encode_av1() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let output = dir.path().join("test_av1.mp4");
+
+        let config = EncoderConfig {
+            output_path: output.clone(),
+            width: 320,
+            height: 240,
+            fps: 30,
+            codec: Codec::AV1,
+            bitrate: None,
+            pixel_format: "bgra".to_string(),
+        };
+
+        let frame_size = (config.width * config.height * 4) as usize;
+        let frame = vec![0u8; frame_size];
+
+        let mut encoder = FfmpegEncoder::new(config)?;
+        for _ in 0..10 {
+            encoder.write_frame(&frame)?;
+        }
+        encoder.finish()?;
+
+        assert!(output.exists(), "output file must exist");
+        assert!(
+            std::fs::metadata(&output)?.len() > 0,
+            "output file must not be empty"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_custom_resolution() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let output = dir.path().join("test_720p.mp4");
+
+        let config = EncoderConfig {
+            output_path: output.clone(),
+            width: 1280,
+            height: 720,
+            fps: 24,
+            codec: Codec::H264,
+            bitrate: Some(3000),
+            pixel_format: "bgra".to_string(),
+        };
+
+        let frame_size = (config.width * config.height * 4) as usize;
+        let frame = vec![0u8; frame_size];
+
+        let mut encoder = FfmpegEncoder::new(config)?;
+        for _ in 0..10 {
+            encoder.write_frame(&frame)?;
+        }
+        encoder.finish()?;
+
+        assert!(output.exists(), "output file must exist");
+        assert!(
+            std::fs::metadata(&output)?.len() > 0,
+            "output file must not be empty"
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn test_encode_h265() -> Result<()> {
         let dir = tempfile::tempdir()?;
         let output = dir.path().join("test_h265.mp4");

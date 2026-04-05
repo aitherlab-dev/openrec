@@ -174,6 +174,32 @@ mod tests {
     }
 
     #[test]
+    fn selected_source_monitor_type() {
+        let source = SelectedSource {
+            node_id: 1,
+            source_type: CaptureSourceType::Monitor,
+            size: Some((2560, 1440)),
+        };
+        assert_eq!(source.source_type, CaptureSourceType::Monitor);
+        assert_eq!(source.node_id, 1);
+        assert_eq!(source.size, Some((2560, 1440)));
+    }
+
+    #[test]
+    fn selected_source_default_size() {
+        let source = SelectedSource {
+            node_id: 99,
+            source_type: CaptureSourceType::Monitor,
+            size: None,
+        };
+        assert!(source.size.is_none());
+        // Код pipeline использует unwrap_or((1920, 1080)) — size=None допустима
+        let (w, h) = source.size.unwrap_or((1920, 1080));
+        assert_eq!(w, 1920);
+        assert_eq!(h, 1080);
+    }
+
+    #[test]
     #[ignore]
     fn integration_create_session() {
         // Требует активную D-Bus GUI-сессию

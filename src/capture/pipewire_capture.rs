@@ -421,6 +421,64 @@ mod tests {
     }
 
     #[test]
+    fn video_frame_data_integrity() {
+        let width: u32 = 640;
+        let height: u32 = 480;
+        let stride = width * 4;
+        let data = vec![0xABu8; stride as usize * height as usize];
+
+        let frame = VideoFrame {
+            width,
+            height,
+            stride,
+            format: PixelFormat::RGBA,
+            data: data.clone(),
+            timestamp_ms: 999,
+        };
+
+        assert_eq!(frame.data.len(), (stride * height) as usize);
+        assert_eq!(frame.data.len(), frame.expected_size());
+        assert!(frame.data.iter().all(|&b| b == 0xAB));
+    }
+
+    #[test]
+    fn pixel_format_debug() {
+        // All variants produce non-empty Debug output
+        let bgra = format!("{:?}", PixelFormat::BGRA);
+        let rgba = format!("{:?}", PixelFormat::RGBA);
+        let bgrx = format!("{:?}", PixelFormat::BGRx);
+
+        assert!(bgra.contains("BGRA"), "got: {bgra}");
+        assert!(rgba.contains("RGBA"), "got: {rgba}");
+        assert!(bgrx.contains("BGRx"), "got: {bgrx}");
+    }
+
+    #[test]
+    fn video_frame_timestamp() {
+        let ts = 1_700_000_000_000u64; // realistic millisecond timestamp
+        let frame = VideoFrame {
+            width: 100,
+            height: 100,
+            stride: 400,
+            format: PixelFormat::BGRx,
+            data: vec![0u8; 400 * 100],
+            timestamp_ms: ts,
+        };
+        assert_eq!(frame.timestamp_ms, ts);
+
+        // Zero timestamp is also valid (e.g. relative timing)
+        let frame_zero = VideoFrame {
+            width: 1,
+            height: 1,
+            stride: 4,
+            format: PixelFormat::BGRA,
+            data: vec![0u8; 4],
+            timestamp_ms: 0,
+        };
+        assert_eq!(frame_zero.timestamp_ms, 0);
+    }
+
+    #[test]
     #[ignore] // requires running PipeWire daemon
     fn capture_create_and_stop() {
         pw::init();
