@@ -162,16 +162,16 @@ fn run_capture_loop(
         })
         .param_changed(|_stream, data, id, param| {
             if let Some(param) = param {
-                if id == spa::param::ParamType::Format.as_raw() {
-                    if data.format.parse(param).is_ok() {
-                        data.sample_rate = data.format.rate();
-                        data.channels = data.format.channels() as u16;
-                        log::info!(
-                            "audio format negotiated: {}Hz, {}ch",
-                            data.sample_rate,
-                            data.channels
-                        );
-                    }
+                if id == spa::param::ParamType::Format.as_raw()
+                    && data.format.parse(param).is_ok()
+                {
+                    data.sample_rate = data.format.rate();
+                    data.channels = data.format.channels() as u16;
+                    log::info!(
+                        "audio format negotiated: {}Hz, {}ch",
+                        data.sample_rate,
+                        data.channels
+                    );
                 }
             }
         })
