@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use directories::ProjectDirs;
@@ -151,8 +151,10 @@ impl AppConfig {
         let content = fs::read_to_string(&path)
             .with_context(|| format!("failed to read config from {}", path.display()))?;
 
-        let config: Self = serde_json::from_str(&content)
+        let mut config: Self = serde_json::from_str(&content)
             .with_context(|| format!("failed to parse config from {}", path.display()))?;
+
+        config.validate();
 
         Ok(config)
     }
@@ -174,7 +176,11 @@ impl AppConfig {
         Ok(())
     }
 
-    pub fn recordings_dir(&self) -> Result<PathBuf> {
+    pub fn recordings_dir(&self) -> &Path {
+        &self.recordings_dir
+    }
+
+    pub fn ensure_recordings_dir(&self) -> Result<&Path> {
         fs::create_dir_all(&self.recordings_dir)
             .with_context(|| {
                 format!(
@@ -183,6 +189,14 @@ impl AppConfig {
                 )
             })?;
 
-        Ok(self.recordings_dir.clone())
+        Ok(&self.recordings_dir)
+    }
+
+    pub fn validate(&mut self) {
+        self.video_fps = self.video_fps.clamp(1, 120);
+
+        if let ExportQuality::Custom(ref mut bitrate) = self.export_quality {
+            *bitrate = (*bitrate).clamp(100, 100_000);
+        }
     }
 }
