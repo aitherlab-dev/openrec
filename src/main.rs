@@ -4,6 +4,7 @@ mod capture;
 #[allow(dead_code)]
 mod config;
 mod editor;
+#[allow(dead_code)]
 mod export;
 mod project;
 #[allow(dead_code)]
