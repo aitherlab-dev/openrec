@@ -20,6 +20,7 @@ fn main() -> iced::Result {
 
     iced::application(App::boot, App::update, App::view)
         .title(App::title)
+        .subscription(App::subscription)
         .centered()
         .run()
 }
