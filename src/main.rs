@@ -1,5 +1,6 @@
 mod app;
 mod camera;
+#[allow(dead_code)]
 mod capture;
 #[allow(dead_code)]
 mod config;
