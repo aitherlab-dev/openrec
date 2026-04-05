@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 
 use anyhow::{bail, Context, Result};
+use log::warn;
 
 #[derive(Debug, Clone)]
 pub enum Codec {
@@ -38,12 +39,14 @@ impl Default for EncoderConfig {
 
 pub struct FfmpegEncoder {
     child: Child,
+    expected_frame_size: usize,
+    finished: bool,
 }
 
 impl FfmpegEncoder {
     pub fn is_available() -> bool {
-        Command::new("which")
-            .arg("ffmpeg")
+        Command::new("ffmpeg")
+            .arg("-version")
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .status()
@@ -60,6 +63,7 @@ impl FfmpegEncoder {
 
         let video_size = format!("{}x{}", config.width, config.height);
         let fps_str = config.fps.to_string();
+        let expected_frame_size = (config.width * config.height * 4) as usize;
 
         let mut cmd = Command::new("ffmpeg");
         cmd.args([
@@ -90,10 +94,21 @@ impl FfmpegEncoder {
 
         let child = cmd.spawn().context("failed to spawn ffmpeg")?;
 
-        Ok(Self { child })
+        Ok(Self {
+            child,
+            expected_frame_size,
+            finished: false,
+        })
     }
 
     pub fn write_frame(&mut self, data: &[u8]) -> Result<()> {
+        if data.len() != self.expected_frame_size {
+            bail!(
+                "frame size mismatch: got {}, expected {}",
+                data.len(),
+                self.expected_frame_size
+            );
+        }
         let stdin = self
             .child
             .stdin
@@ -106,19 +121,38 @@ impl FfmpegEncoder {
     }
 
     pub fn finish(mut self) -> Result<()> {
+        self.finished = true;
         drop(self.child.stdin.take());
 
-        let output = self
+        let status = self
             .child
-            .wait_with_output()
+            .wait()
             .context("failed to wait for ffmpeg")?;
 
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            bail!("ffmpeg exited with {}: {}", output.status, stderr);
+        if !status.success() {
+            bail!("ffmpeg exited with {}", status);
         }
 
         Ok(())
+    }
+}
+
+impl Drop for FfmpegEncoder {
+    fn drop(&mut self) {
+        if self.finished {
+            return;
+        }
+        drop(self.child.stdin.take());
+        match self.child.wait() {
+            Ok(status) => {
+                if !status.success() {
+                    warn!("ffmpeg exited with {} during drop", status);
+                }
+            }
+            Err(e) => {
+                warn!("failed to wait for ffmpeg during drop: {}", e);
+            }
+        }
     }
 }
 
@@ -196,6 +230,88 @@ mod tests {
 
         let mut encoder = FfmpegEncoder::new(config)?;
         for _ in 0..30 {
+            encoder.write_frame(&frame)?;
+        }
+        encoder.finish()?;
+
+        assert!(output.exists(), "output file must exist");
+        assert!(
+            std::fs::metadata(&output)?.len() > 0,
+            "output file must not be empty"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_frame_size_mismatch() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let output = dir.path().join("test_mismatch.mp4");
+
+        let config = EncoderConfig {
+            output_path: output,
+            width: 320,
+            height: 240,
+            fps: 30,
+            codec: Codec::H264,
+            bitrate: None,
+            pixel_format: "bgra".to_string(),
+        };
+
+        let mut encoder = FfmpegEncoder::new(config)?;
+        let wrong_frame = vec![0u8; 100];
+        let err = encoder.write_frame(&wrong_frame).unwrap_err();
+        assert!(
+            err.to_string().contains("frame size mismatch"),
+            "expected frame size mismatch error, got: {}",
+            err
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_finish_without_frames() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let output = dir.path().join("test_empty.mp4");
+
+        let config = EncoderConfig {
+            output_path: output,
+            width: 320,
+            height: 240,
+            fps: 30,
+            codec: Codec::H264,
+            bitrate: None,
+            pixel_format: "bgra".to_string(),
+        };
+
+        let encoder = FfmpegEncoder::new(config)?;
+        // finish() without frames should not panic — graceful shutdown
+        let _ = encoder.finish();
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_encode_h265() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let output = dir.path().join("test_h265.mp4");
+
+        let config = EncoderConfig {
+            output_path: output.clone(),
+            width: 320,
+            height: 240,
+            fps: 30,
+            codec: Codec::H265,
+            bitrate: None,
+            pixel_format: "bgra".to_string(),
+        };
+
+        let frame_size = (config.width * config.height * 4) as usize;
+        let frame = vec![0u8; frame_size];
+
+        let mut encoder = FfmpegEncoder::new(config)?;
+        for _ in 0..10 {
             encoder.write_frame(&frame)?;
         }
         encoder.finish()?;
