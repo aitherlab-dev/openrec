@@ -5,6 +5,7 @@ mod config;
 mod editor;
 mod export;
 mod project;
+#[allow(dead_code)]
 mod tray;
 mod ui;
 

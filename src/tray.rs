@@ -1,4 +1,7 @@
-use ksni::menu::{StandardItem, MenuItem};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+use ksni::menu::{MenuItem, StandardItem};
 use ksni::{Tray, TrayMethods};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -12,7 +15,7 @@ pub enum TrayCommand {
 }
 
 struct OpenRecTray {
-    recording: bool,
+    recording: Arc<AtomicBool>,
     sender: mpsc::Sender<TrayCommand>,
 }
 
@@ -26,10 +29,15 @@ impl Tray for OpenRecTray {
     }
 
     fn icon_name(&self) -> String {
-        "media-record".into()
+        if self.recording.load(Ordering::Relaxed) {
+            "media-playback-stop".into()
+        } else {
+            "media-record".into()
+        }
     }
 
     fn menu(&self) -> Vec<MenuItem<Self>> {
+        let is_recording = self.recording.load(Ordering::Relaxed);
         let start_sender = self.sender.clone();
         let stop_sender = self.sender.clone();
         let editor_sender = self.sender.clone();
@@ -38,7 +46,7 @@ impl Tray for OpenRecTray {
         vec![
             StandardItem {
                 label: "Начать запись".into(),
-                enabled: !self.recording,
+                enabled: !is_recording,
                 activate: Box::new(move |_| {
                     let _ = start_sender.try_send(TrayCommand::StartRecording);
                 }),
@@ -47,7 +55,7 @@ impl Tray for OpenRecTray {
             .into(),
             StandardItem {
                 label: "Остановить запись".into(),
-                enabled: self.recording,
+                enabled: is_recording,
                 activate: Box::new(move |_| {
                     let _ = stop_sender.try_send(TrayCommand::StopRecording);
                 }),
@@ -78,19 +86,19 @@ impl Tray for OpenRecTray {
 pub struct TrayService;
 
 impl TrayService {
-    pub fn spawn(sender: mpsc::Sender<TrayCommand>) -> JoinHandle<()> {
+    pub fn spawn(
+        sender: mpsc::Sender<TrayCommand>,
+        recording: Arc<AtomicBool>,
+    ) -> JoinHandle<()> {
         tokio::spawn(async move {
-            let tray = OpenRecTray {
-                recording: false,
-                sender,
-            };
+            let tray = OpenRecTray { recording, sender };
             match tray.spawn().await {
                 Ok(handle) => {
                     log::info!("System tray started");
-                    // Keep handle alive until the tray service shuts down
-                    while !handle.is_closed() {
-                        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-                    }
+                    // ksni Handle has no shutdown signal to await;
+                    // pending() keeps the task alive without polling
+                    std::future::pending::<()>().await;
+                    drop(handle);
                 }
                 Err(e) => {
                     log::error!("Failed to start system tray: {e}");
