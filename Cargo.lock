@@ -3338,6 +3338,7 @@ dependencies = [
  "tokio",
  "uuid",
  "wgpu 29.0.1",
+ "zbus",
 ]
 
 [[package]]

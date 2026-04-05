@@ -89,17 +89,42 @@ pub struct TrayService;
 // so integration tests for tray menu are not feasible in unit tests.
 
 impl TrayService {
+    /// Проверяет доступность D-Bus сессии для StatusNotifier.
+    pub async fn is_available() -> bool {
+        match zbus::Connection::session().await {
+            Ok(conn) => {
+                // Проверяем что org.kde.StatusNotifierWatcher доступен
+                let result = conn
+                    .call_method(
+                        Some("org.freedesktop.DBus"),
+                        "/org/freedesktop/DBus",
+                        Some("org.freedesktop.DBus"),
+                        "NameHasOwner",
+                        &("org.kde.StatusNotifierWatcher",),
+                    )
+                    .await;
+                match result {
+                    Ok(reply) => reply.body().deserialize::<bool>().unwrap_or(false),
+                    Err(_) => false,
+                }
+            }
+            Err(_) => false,
+        }
+    }
+
     pub fn spawn(
         sender: mpsc::Sender<TrayCommand>,
         recording: Arc<AtomicBool>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
+            if !Self::is_available().await {
+                log::warn!("StatusNotifierWatcher not available, running without system tray");
+                return;
+            }
             let tray = OpenRecTray { recording, sender };
             match tray.spawn().await {
                 Ok(handle) => {
                     log::info!("System tray started");
-                    // ksni Handle has no shutdown signal to await;
-                    // pending() keeps the task alive without polling
                     std::future::pending::<()>().await;
                     drop(handle);
                 }
