@@ -32,10 +32,10 @@ pub struct RecordingPipeline {
     output_path: Option<PathBuf>,
 }
 
-/// Генерирует имя файла вида `openrec_YYYY-MM-DD_HH-MM-SS.mp4`.
+/// Генерирует имя файла вида `openrec_YYYY-MM-DD_HH-MM-SS-mmm.mp4`.
 pub fn generate_output_filename(recordings_dir: &std::path::Path) -> PathBuf {
     let now = chrono::Local::now();
-    let name = now.format("openrec_%Y-%m-%d_%H-%M-%S.mp4").to_string();
+    let name = now.format("openrec_%Y-%m-%d_%H-%M-%S-%3f.mp4").to_string();
     recordings_dir.join(name)
 }
 
@@ -113,6 +113,14 @@ impl RecordingPipeline {
 
         self.state = RecordingState::Starting;
 
+        let result = self.start_inner().await;
+        if result.is_err() {
+            self.state = RecordingState::Idle;
+        }
+        result
+    }
+
+    async fn start_inner(&mut self) -> Result<()> {
         // 1. Portal session
         let session = ScreencastSession::new()
             .await
@@ -206,12 +214,19 @@ impl RecordingPipeline {
             capture.stop();
         }
 
-        // 2. Сигнал writer thread остановиться
+        // 2. Закрыть portal session сразу — стрим больше не нужен
+        if let Some(mut session) = self.session.take() {
+            if let Err(e) = session.close().await {
+                log::warn!("failed to close screencast session: {e:#}");
+            }
+        }
+
+        // 3. Сигнал writer thread остановиться
         if let Some(flag) = self.writer_stop.take() {
             flag.store(true, Ordering::Relaxed);
         }
 
-        // 3. Дождаться writer thread (он вызовет encoder.finish())
+        // 4. Дождаться writer thread (он вызовет encoder.finish())
         if let Some(handle) = self.writer_thread.take() {
             match handle.join() {
                 Ok(Ok(())) => {}
@@ -223,13 +238,6 @@ impl RecordingPipeline {
                     self.state = RecordingState::Error("writer thread panicked".to_string());
                     bail!("writer thread panicked");
                 }
-            }
-        }
-
-        // 4. Закрыть portal session
-        if let Some(mut session) = self.session.take() {
-            if let Err(e) = session.close().await {
-                log::warn!("failed to close screencast session: {e:#}");
             }
         }
 
@@ -286,8 +294,7 @@ mod tests {
             filename.ends_with(".mp4"),
             "filename should end with '.mp4': {filename}"
         );
-        // openrec_YYYY-MM-DD_HH-MM-SS.mp4
-        // Проверяем формат через паттерн, не длину
+        // openrec_YYYY-MM-DD_HH-MM-SS-mmm.mp4
         let parts: Vec<&str> = filename
             .trim_start_matches("openrec_")
             .trim_end_matches(".mp4")
@@ -295,7 +302,8 @@ mod tests {
             .collect();
         assert_eq!(parts.len(), 2, "expected date_time parts: {filename}");
         assert_eq!(parts[0].len(), 10, "date part YYYY-MM-DD: {}", parts[0]);
-        assert_eq!(parts[1].len(), 8, "time part HH-MM-SS: {}", parts[1]);
+        // HH-MM-SS-mmm = 12 chars
+        assert_eq!(parts[1].len(), 12, "time part HH-MM-SS-mmm: {}", parts[1]);
         assert_eq!(path.parent().unwrap(), dir);
     }
 
