@@ -1,0 +1,21 @@
+[package]
+name = "openrec"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+iced = { version = "0.14", features = ["tokio", "image", "svg", "canvas"] }
+ashpd = { version = "0.13", features = ["tokio"] }
+pipewire = "0.9"
+ksni = "0.3"
+nokhwa = { version = "0.10", features = ["input-v4l"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+directories = "6"
+log = "0.4"
+env_logger = "0.11"
+anyhow = "1"
+wgpu = "29"
