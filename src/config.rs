@@ -200,3 +200,131 @@ impl AppConfig {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let cfg = AppConfig::default();
+        assert_eq!(cfg.video_fps, 60);
+        assert_eq!(cfg.video_codec, VideoCodec::H264);
+        assert!(cfg.audio_input_device.is_none());
+        assert!(cfg.audio_system_capture);
+        assert!(!cfg.webcam_enabled);
+        assert!(cfg.webcam_device.is_none());
+        assert_eq!(cfg.webcam_shape, WebcamShape::Circle);
+        assert_eq!(cfg.export_quality, ExportQuality::High);
+        assert_eq!(cfg.export_format, ExportFormat::Mp4);
+        assert_eq!(cfg.hotkeys.toggle_recording, "Super+Shift+R");
+        assert_eq!(cfg.hotkeys.cancel_recording, "Escape");
+    }
+
+    #[test]
+    fn test_serialize_deserialize() {
+        let mut cfg = AppConfig::default();
+        cfg.video_fps = 30;
+        cfg.video_codec = VideoCodec::AV1;
+        cfg.webcam_enabled = true;
+        cfg.export_quality = ExportQuality::Custom(5000);
+
+        let json = serde_json::to_string(&cfg).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.video_fps, 30);
+        assert_eq!(restored.video_codec, VideoCodec::AV1);
+        assert!(restored.webcam_enabled);
+        assert_eq!(restored.export_quality, ExportQuality::Custom(5000));
+    }
+
+    #[test]
+    fn test_deserialize_partial_json() {
+        let json = r#"{"video_fps": 30, "webcam_enabled": true}"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+
+        assert_eq!(cfg.video_fps, 30);
+        assert!(cfg.webcam_enabled);
+        // остальные — default
+        assert_eq!(cfg.video_codec, VideoCodec::H264);
+        assert!(cfg.audio_system_capture);
+        assert_eq!(cfg.export_quality, ExportQuality::High);
+    }
+
+    #[test]
+    fn test_deserialize_empty_json() {
+        let cfg: AppConfig = serde_json::from_str("{}").unwrap();
+        let def = AppConfig::default();
+
+        assert_eq!(cfg.video_fps, def.video_fps);
+        assert_eq!(cfg.video_codec, def.video_codec);
+        assert_eq!(cfg.audio_system_capture, def.audio_system_capture);
+        assert_eq!(cfg.webcam_enabled, def.webcam_enabled);
+        assert_eq!(cfg.export_quality, def.export_quality);
+        assert_eq!(cfg.export_format, def.export_format);
+    }
+
+    #[test]
+    fn test_validate_fps_too_high() {
+        let mut cfg = AppConfig::default();
+        cfg.video_fps = 999;
+        cfg.validate();
+        assert_eq!(cfg.video_fps, 120);
+    }
+
+    #[test]
+    fn test_validate_fps_zero() {
+        let mut cfg = AppConfig::default();
+        cfg.video_fps = 0;
+        cfg.validate();
+        assert_eq!(cfg.video_fps, 1);
+    }
+
+    #[test]
+    fn test_validate_custom_bitrate_zero() {
+        let mut cfg = AppConfig::default();
+        cfg.export_quality = ExportQuality::Custom(0);
+        cfg.validate();
+        assert_eq!(cfg.export_quality, ExportQuality::Custom(100));
+    }
+
+    #[test]
+    fn test_validate_custom_bitrate_huge() {
+        let mut cfg = AppConfig::default();
+        cfg.export_quality = ExportQuality::Custom(999_999);
+        cfg.validate();
+        assert_eq!(cfg.export_quality, ExportQuality::Custom(100_000));
+    }
+
+    #[test]
+    fn test_recordings_dir_getter() {
+        let cfg = AppConfig::default();
+        let path = cfg.recordings_dir();
+        assert!(path.to_str().unwrap().contains("recordings"));
+    }
+
+    #[test]
+    fn test_config_save_load_roundtrip() {
+        let mut original = AppConfig::default();
+        original.video_fps = 24;
+        original.video_codec = VideoCodec::H265;
+        original.webcam_enabled = true;
+        original.webcam_shape = WebcamShape::RoundedRect;
+        original.export_quality = ExportQuality::Custom(8000);
+        original.export_format = ExportFormat::Gif;
+        original.audio_system_capture = false;
+        original.hotkeys.toggle_recording = "Ctrl+R".to_string();
+
+        let json = serde_json::to_string_pretty(&original).unwrap();
+        let restored: AppConfig = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.video_fps, 24);
+        assert_eq!(restored.video_codec, VideoCodec::H265);
+        assert!(restored.webcam_enabled);
+        assert_eq!(restored.webcam_shape, WebcamShape::RoundedRect);
+        assert_eq!(restored.export_quality, ExportQuality::Custom(8000));
+        assert_eq!(restored.export_format, ExportFormat::Gif);
+        assert!(!restored.audio_system_capture);
+        assert_eq!(restored.hotkeys.toggle_recording, "Ctrl+R");
+    }
+}

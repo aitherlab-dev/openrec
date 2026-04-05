@@ -1,15 +1,16 @@
 use iced::widget::{button, column, container, text};
 use iced::{Element, Length, Task};
 
-enum AppMode {
+#[derive(Debug, PartialEq)]
+pub enum AppMode {
     Idle,
     Recording,
     Editor,
 }
 
 pub struct App {
-    mode: AppMode,
-    recording_duration: Option<std::time::Duration>,
+    pub(crate) mode: AppMode,
+    pub(crate) recording_duration: Option<std::time::Duration>,
 }
 
 #[derive(Debug, Clone)]
@@ -84,5 +85,74 @@ impl App {
         container(content.spacing(20).align_x(iced::Alignment::Center))
             .center(Length::Fill)
             .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn new_app() -> App {
+        let (app, _task) = App::boot();
+        app
+    }
+
+    #[test]
+    fn test_boot_initial_state() {
+        let app = new_app();
+        assert_eq!(app.mode, AppMode::Idle);
+        assert!(app.recording_duration.is_none());
+    }
+
+    #[test]
+    fn test_start_recording() {
+        let mut app = new_app();
+        let _ = app.update(Message::StartRecording);
+        assert_eq!(app.mode, AppMode::Recording);
+        assert!(app.recording_duration.is_some());
+    }
+
+    #[test]
+    fn test_stop_recording() {
+        let mut app = new_app();
+        let _ = app.update(Message::StartRecording);
+        let _ = app.update(Message::StopRecording);
+        assert_eq!(app.mode, AppMode::Idle);
+        assert!(app.recording_duration.is_none());
+    }
+
+    #[test]
+    fn test_open_editor() {
+        let mut app = new_app();
+        let _ = app.update(Message::OpenEditor);
+        assert_eq!(app.mode, AppMode::Editor);
+    }
+
+    #[test]
+    fn test_back_to_idle() {
+        let mut app = new_app();
+        let _ = app.update(Message::OpenEditor);
+        let _ = app.update(Message::BackToIdle);
+        assert_eq!(app.mode, AppMode::Idle);
+    }
+
+    #[test]
+    fn test_title_idle() {
+        let app = new_app();
+        assert_eq!(app.title(), "OpenRec");
+    }
+
+    #[test]
+    fn test_title_recording() {
+        let mut app = new_app();
+        let _ = app.update(Message::StartRecording);
+        assert!(app.title().contains("Запись"));
+    }
+
+    #[test]
+    fn test_title_editor() {
+        let mut app = new_app();
+        let _ = app.update(Message::OpenEditor);
+        assert!(app.title().contains("Редактор"));
     }
 }

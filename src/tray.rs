@@ -85,6 +85,9 @@ impl Tray for OpenRecTray {
 
 pub struct TrayService;
 
+// Note: OpenRecTray is private and requires a running D-Bus session,
+// so integration tests for tray menu are not feasible in unit tests.
+
 impl TrayService {
     pub fn spawn(
         sender: mpsc::Sender<TrayCommand>,
@@ -105,5 +108,40 @@ impl TrayService {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_tray_command_variants() {
+        let commands = vec![
+            TrayCommand::StartRecording,
+            TrayCommand::StopRecording,
+            TrayCommand::OpenEditor,
+            TrayCommand::Quit,
+        ];
+
+        for cmd in &commands {
+            let cloned = cmd.clone();
+            // Debug format works
+            let _ = format!("{:?}", cloned);
+        }
+
+        assert_eq!(commands.len(), 4);
+    }
+
+    #[test]
+    fn test_recording_state_toggle() {
+        let recording = Arc::new(AtomicBool::new(false));
+        assert!(!recording.load(Ordering::Relaxed));
+
+        recording.store(true, Ordering::Relaxed);
+        assert!(recording.load(Ordering::Relaxed));
+
+        recording.store(false, Ordering::Relaxed);
+        assert!(!recording.load(Ordering::Relaxed));
     }
 }
