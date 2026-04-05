@@ -1,3 +1,4 @@
+pub mod cursor;
 pub mod pipewire_capture;
 pub mod portal;
 
