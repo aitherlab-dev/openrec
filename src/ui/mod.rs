@@ -1,3 +1,4 @@
+pub mod editor_window;
 pub mod recorder_hud;
 
 #[allow(unused_imports)]
