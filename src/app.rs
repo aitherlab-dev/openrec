@@ -1,8 +1,7 @@
 use iced::widget::{button, column, container, text};
 use iced::{Element, Length, Task};
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum AppMode {
+enum AppMode {
     Idle,
     Recording,
     Editor,
@@ -15,10 +14,10 @@ pub struct App {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    SwitchMode(AppMode),
     StartRecording,
     StopRecording,
     OpenEditor,
+    BackToIdle,
     Quit,
 }
 
@@ -42,10 +41,6 @@ impl App {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::SwitchMode(mode) => {
-                self.mode = mode;
-                Task::none()
-            }
             Message::StartRecording => {
                 self.mode = AppMode::Recording;
                 self.recording_duration = Some(std::time::Duration::ZERO);
@@ -60,6 +55,10 @@ impl App {
                 self.mode = AppMode::Editor;
                 Task::none()
             }
+            Message::BackToIdle => {
+                self.mode = AppMode::Idle;
+                Task::none()
+            }
             Message::Quit => iced::exit(),
         }
     }
@@ -69,6 +68,7 @@ impl App {
             AppMode::Idle => column![
                 text("OpenRec — Готов к записи").size(24),
                 button("Начать запись").on_press(Message::StartRecording),
+                button("Открыть редактор").on_press(Message::OpenEditor),
             ],
             AppMode::Recording => column![
                 text("Идёт запись...").size(24),
@@ -76,7 +76,8 @@ impl App {
             ],
             AppMode::Editor => column![
                 text("Редактор (в разработке)").size(24),
-                button("Назад").on_press(Message::SwitchMode(AppMode::Idle)),
+                button("Назад").on_press(Message::BackToIdle),
+                button("Выход").on_press(Message::Quit),
             ],
         };
 

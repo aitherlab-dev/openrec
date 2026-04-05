@@ -14,7 +14,7 @@ fn main() -> iced::Result {
     env_logger::init();
 
     iced::application(App::boot, App::update, App::view)
-        .title("OpenRec")
+        .title(App::title)
         .centered()
         .run()
 }
