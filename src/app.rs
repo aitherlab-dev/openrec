@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use iced::widget::{button, column, container, text};
@@ -11,6 +11,7 @@ use crate::capture::cursor::CursorTelemetry;
 use crate::capture::pipeline::RecordingPipeline;
 use crate::config::AppConfig;
 use crate::tray::{TrayCommand, TrayService};
+use crate::ui::recorder_hud::{recorder_idle_view, recorder_recording_view};
 
 #[derive(Debug, PartialEq)]
 pub enum AppMode {
@@ -19,8 +20,8 @@ pub enum AppMode {
     Editor,
 }
 
-/// Handle для управления pipeline из async контекста.
-/// Pipeline живёт в отдельной tokio task; stop отправляется через oneshot.
+/// Handle для управления pipeline.
+/// Pipeline живёт в отдельном std::thread; stop отправляется через oneshot.
 pub struct PipelineHandle {
     stop_tx: Option<oneshot::Sender<()>>,
     result_rx: Option<oneshot::Receiver<Result<PathBuf, String>>>,
@@ -30,12 +31,13 @@ pub struct App {
     pub(crate) mode: AppMode,
     pub(crate) recording_duration: Option<Duration>,
     config: AppConfig,
-    pipeline_handle: Option<PipelineHandle>,
+    pipeline_handle: Arc<Mutex<Option<PipelineHandle>>>,
     cursor_telemetry: Option<CursorTelemetry>,
     recording_start: Option<Instant>,
     #[allow(dead_code)] // held to keep Arc alive; accessed via TRAY_RX static
     tray_receiver: Arc<TokioMutex<mpsc::Receiver<TrayCommand>>>,
     recording_flag: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
 }
 
 #[derive(Debug, Clone)]
@@ -61,36 +63,57 @@ pub fn tray_command_to_message(cmd: TrayCommand) -> Message {
     }
 }
 
-/// Запускает pipeline в отдельной tokio task. Возвращает handle для управления.
-async fn start_pipeline(config: AppConfig) -> Result<PipelineHandle, String> {
+/// Запускает pipeline в отдельном std::thread (pipeline не Send).
+/// Возвращает через oneshot когда pipeline.start() завершился.
+/// PipelineHandle сохраняется в shared slot.
+fn launch_pipeline(
+    config: AppConfig,
+    handle_slot: Arc<Mutex<Option<PipelineHandle>>>,
+    cancelled: Arc<AtomicBool>,
+) -> oneshot::Receiver<Result<(), String>> {
+    let (started_tx, started_rx) = oneshot::channel();
     let (stop_tx, stop_rx) = oneshot::channel();
     let (result_tx, result_rx) = oneshot::channel();
 
-    tokio::task::spawn_local(async move {
-        let mut pipeline = RecordingPipeline::new(&config);
-        match pipeline.start().await {
-            Ok(()) => {
-                // Ждём сигнал stop
-                let _ = stop_rx.await;
-                let result = pipeline
-                    .stop()
-                    .await
-                    .map_err(|e| format!("{e:#}"));
-                let _ = result_tx.send(result);
-            }
-            Err(e) => {
-                let _ = result_tx.send(Err(format!("{e:#}")));
-            }
-        }
-    });
+    std::thread::Builder::new()
+        .name("recording-pipeline".into())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("failed to create tokio runtime for pipeline");
 
-    // Даём task время запуститься
-    tokio::task::yield_now().await;
+            rt.block_on(async {
+                let mut pipeline = RecordingPipeline::new(&config);
+                match pipeline.start().await {
+                    Ok(()) => {
+                        // Сохранить handle в shared slot
+                        {
+                            let mut slot = handle_slot.lock().unwrap();
+                            *slot = Some(PipelineHandle {
+                                stop_tx: Some(stop_tx),
+                                result_rx: Some(result_rx),
+                            });
+                        }
+                        // Сообщить что pipeline запущен
+                        let _ = started_tx.send(Ok(()));
 
-    Ok(PipelineHandle {
-        stop_tx: Some(stop_tx),
-        result_rx: Some(result_rx),
-    })
+                        // Ждём сигнал stop
+                        let _ = stop_rx.await;
+                        let result = pipeline.stop().await.map_err(|e| format!("{e:#}"));
+                        let _ = result_tx.send(result);
+                    }
+                    Err(e) => {
+                        let _ = started_tx.send(Err(format!("{e:#}")));
+                    }
+                }
+            });
+        })
+        .expect("failed to spawn pipeline thread");
+
+    let _ = cancelled; // будет использоваться в RecordingStarted
+
+    started_rx
 }
 
 impl App {
@@ -112,11 +135,12 @@ impl App {
             mode: AppMode::Idle,
             recording_duration: None,
             config,
-            pipeline_handle: None,
+            pipeline_handle: Arc::new(Mutex::new(None)),
             cursor_telemetry: None,
             recording_start: None,
             tray_receiver,
             recording_flag,
+            cancelled: Arc::new(AtomicBool::new(false)),
         };
         (app, Task::none())
     }
@@ -156,6 +180,7 @@ impl App {
                 self.recording_start = Some(Instant::now());
                 self.recording_duration = Some(Duration::ZERO);
                 self.recording_flag.store(true, Ordering::Relaxed);
+                self.cancelled.store(false, Ordering::Relaxed);
 
                 // Запустить cursor telemetry
                 let mut cursor = CursorTelemetry::default();
@@ -164,18 +189,16 @@ impl App {
                 }
                 self.cursor_telemetry = Some(cursor);
 
-                // Запустить pipeline async
-                let config = self.config.clone();
+                // Запустить pipeline в отдельном потоке
+                let handle_slot = self.pipeline_handle.clone();
+                let cancelled = self.cancelled.clone();
+                let started_rx = launch_pipeline(self.config.clone(), handle_slot, cancelled);
+
                 Task::perform(
                     async move {
-                        start_pipeline(config)
-                            .await
-                            .map_err(|e| e.to_string())
+                        started_rx.await.unwrap_or(Err("pipeline channel closed".into()))
                     },
-                    |result| match result {
-                        Ok(_handle) => Message::RecordingStarted(Ok(())),
-                        Err(e) => Message::RecordingStarted(Err(e)),
-                    },
+                    Message::RecordingStarted,
                 )
             }
             Message::StopRecording => {
@@ -184,6 +207,7 @@ impl App {
                 }
                 self.mode = AppMode::Idle;
                 self.recording_flag.store(false, Ordering::Relaxed);
+                self.cancelled.store(true, Ordering::Relaxed);
 
                 // Остановить cursor telemetry
                 if let Some(mut cursor) = self.cursor_telemetry.take() {
@@ -191,12 +215,15 @@ impl App {
                     log::info!("Cursor positions recorded: {}", positions.len());
                 }
 
-                // Остановить pipeline
-                if let Some(mut handle) = self.pipeline_handle.take() {
+                // Остановить pipeline через handle
+                let mut handle_opt = self.pipeline_handle.lock().unwrap().take();
+                if let Some(ref mut handle) = handle_opt {
                     if let Some(tx) = handle.stop_tx.take() {
                         let _ = tx.send(());
                     }
                     if let Some(rx) = handle.result_rx.take() {
+                        self.recording_start = None;
+                        self.recording_duration = None;
                         return Task::perform(
                             async move { rx.await.unwrap_or(Err("channel closed".into())) },
                             Message::RecordingStopped,
@@ -211,6 +238,19 @@ impl App {
             Message::RecordingStarted(result) => {
                 match result {
                     Ok(()) => {
+                        // Если запись была отменена пока pipeline запускался
+                        if self.cancelled.load(Ordering::Relaxed)
+                            || self.mode != AppMode::Recording
+                        {
+                            log::info!("Recording cancelled during startup, stopping pipeline");
+                            let mut handle_opt = self.pipeline_handle.lock().unwrap().take();
+                            if let Some(ref mut handle) = handle_opt {
+                                if let Some(tx) = handle.stop_tx.take() {
+                                    let _ = tx.send(());
+                                }
+                            }
+                            return Task::none();
+                        }
                         log::info!("Recording pipeline started successfully");
                     }
                     Err(e) => {
@@ -262,35 +302,22 @@ impl App {
     }
 
     pub fn view(&self) -> Element<'_, Message> {
-        let content = match self.mode {
-            AppMode::Idle => column![
-                text("OpenRec — Готов к записи").size(24),
-                button("Начать запись").on_press(Message::StartRecording),
-                button("Открыть редактор").on_press(Message::OpenEditor),
-            ],
+        match self.mode {
+            AppMode::Idle => recorder_idle_view(),
             AppMode::Recording => {
-                let duration_text = match self.recording_duration {
-                    Some(d) => {
-                        let secs = d.as_secs();
-                        format!("Идёт запись... {:02}:{:02}", secs / 60, secs % 60)
-                    }
-                    None => "Идёт запись...".to_string(),
-                };
-                column![
-                    text(duration_text).size(24),
-                    button("Остановить").on_press(Message::StopRecording),
-                ]
+                recorder_recording_view(self.recording_duration.unwrap_or(Duration::ZERO))
             }
-            AppMode::Editor => column![
-                text("Редактор (в разработке)").size(24),
-                button("Назад").on_press(Message::BackToIdle),
-                button("Выход").on_press(Message::Quit),
-            ],
-        };
-
-        container(content.spacing(20).align_x(iced::Alignment::Center))
-            .center(Length::Fill)
-            .into()
+            AppMode::Editor => {
+                let content = column![
+                    text("Редактор (в разработке)").size(24),
+                    button("Назад").on_press(Message::BackToIdle),
+                    button("Выход").on_press(Message::Quit),
+                ];
+                container(content.spacing(20).align_x(iced::Alignment::Center))
+                    .center(Length::Fill)
+                    .into()
+            }
+        }
     }
 }
 
@@ -313,23 +340,22 @@ mod tests {
     use super::*;
 
     fn new_app() -> App {
-        // Для тестов не запускаем трей — создаём dummy канал
         let (_tx, rx) = mpsc::channel(1);
         App {
             mode: AppMode::Idle,
             recording_duration: None,
             config: AppConfig::default(),
-            pipeline_handle: None,
+            pipeline_handle: Arc::new(Mutex::new(None)),
             cursor_telemetry: None,
             recording_start: None,
             tray_receiver: Arc::new(TokioMutex::new(rx)),
             recording_flag: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(false)),
         }
     }
 
     #[test]
     fn test_boot_loads_config() {
-        // boot() запускает TrayService и требует tokio runtime
         let rt = tokio::runtime::Runtime::new().unwrap();
         let (app, _task) = rt.block_on(async { App::boot() });
         assert_eq!(app.mode, AppMode::Idle);
@@ -342,12 +368,10 @@ mod tests {
         let mut app = new_app();
         assert!(!app.recording_flag.load(Ordering::Relaxed));
 
-        // StartRecording sets flag
         let _ = app.update(Message::StartRecording);
         assert!(app.recording_flag.load(Ordering::Relaxed));
         assert_eq!(app.mode, AppMode::Recording);
 
-        // StopRecording clears flag
         let _ = app.update(Message::StopRecording);
         assert!(!app.recording_flag.load(Ordering::Relaxed));
         assert_eq!(app.mode, AppMode::Idle);
@@ -391,7 +415,6 @@ mod tests {
         let _ = app.update(Message::StartRecording);
         assert_eq!(app.mode, AppMode::Recording);
 
-        // Second start should be ignored
         let _ = app.update(Message::StartRecording);
         assert_eq!(app.mode, AppMode::Recording);
     }
@@ -399,7 +422,6 @@ mod tests {
     #[test]
     fn test_stop_when_not_recording() {
         let mut app = new_app();
-        // Stop when idle — no change
         let _ = app.update(Message::StopRecording);
         assert_eq!(app.mode, AppMode::Idle);
     }
@@ -415,6 +437,18 @@ mod tests {
         assert_eq!(app.mode, AppMode::Idle);
         assert!(!app.recording_flag.load(Ordering::Relaxed));
         assert!(app.recording_start.is_none());
+    }
+
+    #[test]
+    fn test_cancellation_during_start() {
+        let mut app = new_app();
+        app.mode = AppMode::Recording;
+        app.cancelled.store(true, Ordering::Relaxed);
+
+        // Pipeline started OK but mode was cancelled
+        let _ = app.update(Message::RecordingStarted(Ok(())));
+        // Pipeline handle should be cleaned up (taken from slot)
+        assert!(app.pipeline_handle.lock().unwrap().is_none());
     }
 
     #[test]
