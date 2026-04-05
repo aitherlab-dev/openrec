@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod cursor;
 pub mod pipeline;
 pub mod pipewire_capture;
