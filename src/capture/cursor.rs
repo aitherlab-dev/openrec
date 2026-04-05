@@ -42,7 +42,7 @@ impl CursorTelemetry {
         let interval = self.poll_interval;
 
         // Очищаем предыдущие данные
-        positions.lock().unwrap().clear();
+        positions.lock().unwrap_or_else(|e| e.into_inner()).clear();
 
         let start_time = Instant::now();
 
@@ -67,7 +67,7 @@ impl CursorTelemetry {
         if let Some(handle) = self.handle.take() {
             let _ = handle.join();
         }
-        let positions = self.positions.lock().unwrap().clone();
+        let positions = std::mem::take(&mut *self.positions.lock().unwrap_or_else(|e| e.into_inner()));
         log::info!("Cursor telemetry stopped, {} positions recorded", positions.len());
         positions
     }
@@ -78,9 +78,9 @@ impl CursorTelemetry {
             .is_some_and(|h| !h.is_finished())
     }
 
-    /// Доступ к накопленным позициям (для тестов и диагностики).
-    pub fn positions(&self) -> Arc<Mutex<Vec<CursorPosition>>> {
-        Arc::clone(&self.positions)
+    /// Количество записанных позиций (для диагностики).
+    pub fn positions_count(&self) -> usize {
+        self.positions.lock().unwrap_or_else(|e| e.into_inner()).len()
     }
 }
 
@@ -116,7 +116,7 @@ fn poll_loop(
         match query_cursor_position() {
             Ok((x, y)) => {
                 let pos = CursorPosition { x, y, timestamp_ms };
-                positions.lock().unwrap().push(pos);
+                positions.lock().unwrap_or_else(|e| e.into_inner()).push(pos);
             }
             Err(e) => {
                 log::debug!("failed to query cursor position: {e}");
@@ -127,6 +127,7 @@ fn poll_loop(
 
 /// Получает позицию курсора через hyprctl (Hyprland).
 /// Формат вывода: "X, Y"
+// TODO: Перейти на Hyprland IPC socket вместо fork/exec для производительности
 fn query_cursor_position() -> Result<(f64, f64)> {
     let output = Command::new("hyprctl")
         .arg("cursorpos")
@@ -179,18 +180,22 @@ mod tests {
 
     #[test]
     fn test_positions_storage() {
-        let telemetry = CursorTelemetry::new(16);
-        let positions = telemetry.positions();
+        let mut telemetry = CursorTelemetry::new(16);
+        // Добавляем позиции напрямую через внутренний mutex
         {
-            let mut guard = positions.lock().unwrap();
+            let mut guard = telemetry.positions.lock().unwrap();
             guard.push(CursorPosition { x: 10.0, y: 20.0, timestamp_ms: 0 });
             guard.push(CursorPosition { x: 30.0, y: 40.0, timestamp_ms: 16 });
             guard.push(CursorPosition { x: 50.0, y: 60.0, timestamp_ms: 32 });
         }
-        let stored = positions.lock().unwrap();
-        assert_eq!(stored.len(), 3);
-        assert_eq!(stored[0].x, 10.0);
-        assert_eq!(stored[2].timestamp_ms, 32);
+        assert_eq!(telemetry.positions_count(), 3);
+        // stop() забирает данные через take
+        let taken = telemetry.stop();
+        assert_eq!(taken.len(), 3);
+        assert_eq!(taken[0].x, 10.0);
+        assert_eq!(taken[2].timestamp_ms, 32);
+        // После take данные пусты
+        assert_eq!(telemetry.positions_count(), 0);
     }
 
     #[test]
@@ -205,6 +210,13 @@ mod tests {
         let (x, y) = parse_hyprctl_cursorpos("1920,1080").unwrap();
         assert_eq!(x, 1920.0);
         assert_eq!(y, 1080.0);
+    }
+
+    #[test]
+    fn test_parse_hyprctl_cursorpos_fractional() {
+        let (x, y) = parse_hyprctl_cursorpos("960.5, 540.75").unwrap();
+        assert_eq!(x, 960.5);
+        assert_eq!(y, 540.75);
     }
 
     #[test]
