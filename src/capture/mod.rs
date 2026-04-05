@@ -1,3 +1,4 @@
+pub mod audio;
 pub mod portal;
 
 #[allow(unused_imports)]
